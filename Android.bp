@@ -506,6 +506,9 @@ cc_defaults {
 
     target: {
         android: {
+            cflags: ["-DTOYBOX_LAZY_LIBCRYPTO"],
+            // Hash applets load libcrypto on use and retain its exported headers.
+            ldflags: ["-Wl,--as-needed"],
             shared_libs: [
                 "libcrypto",
                 "liblog",
