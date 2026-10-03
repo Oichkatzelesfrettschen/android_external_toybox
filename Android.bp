@@ -508,7 +508,7 @@ cc_defaults {
         android: {
             cflags: ["-DTOYBOX_LAZY_LIBCRYPTO"],
             // Hash applets resolve BoringSSL at runtime through its public headers.
-            include_dirs: ["external/boringssl/src/include"],
+            header_libs: ["libcrypto_headers"],
             runtime_libs: ["libcrypto"],
             shared_libs: [
                 "liblog",
