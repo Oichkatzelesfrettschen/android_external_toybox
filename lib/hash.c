@@ -13,10 +13,31 @@
 #include <openssl/md5.h>
 #include <openssl/sha.h>
 
+#ifdef TOYBOX_LAZY_LIBCRYPTO
+#include <dlfcn.h>
+#if CFG_WGET || CFG_GITCOMPAT
+#error Lazy libcrypto requires the Android hash-only crypto configuration
+#endif
+
+static void *crypto_symbol(void *library, const char *prefix, const char *suffix)
+{
+  char symbol[32];
+  int length = snprintf(symbol, sizeof(symbol), "%s_%s", prefix, suffix);
+  void *address;
+
+  if (length<0 || length>=(int)sizeof(symbol)) error_exit("invalid crypto symbol");
+  address = dlsym(library, symbol);
+  if (!address) error_exit("%s: %s", symbol, dlerror());
+
+  return address;
+}
+#define HASH_INIT(name, prefix) {name, 0, 0, 0, prefix##_DIGEST_LENGTH, #prefix}
+#else
 // Initialize array tersely
 #define HASH_INIT(name, prefix) { name, (void *)prefix##_Init, \
   (void *)prefix##_Update, (void *)prefix##_Final, \
   prefix##_DIGEST_LENGTH, }
+#endif
 #define SHA1_DIGEST_LENGTH SHA_DIGEST_LENGTH
 
 void hash_by_name(int fd, char *name, char *result)
@@ -29,6 +50,9 @@ void hash_by_name(int fd, char *name, char *result)
     int (*update)(void *, void *, size_t);
     int (*final)(void *, void *);
     int digest_length;
+#ifdef TOYBOX_LAZY_LIBCRYPTO
+    const char *function_prefix;
+#endif
   } algorithms[] = {
     USE_MD5SUM(HASH_INIT("md5sum", MD5),)
     USE_SHA1SUM(HASH_INIT("sha1sum", SHA1),)
@@ -39,11 +63,19 @@ void hash_by_name(int fd, char *name, char *result)
   }, * hash;
   int i;
 
-  // This should never NOT match, so no need to check
   for (i = 0; i<ARRAY_LEN(algorithms); i++)
     if (!strcmp(name, algorithms[i].name)) break;
+  if (i==ARRAY_LEN(algorithms)) error_exit("unknown hash: %s", name);
   hash = algorithms+i;
 
+#ifdef TOYBOX_LAZY_LIBCRYPTO
+  // RTLD_NODELETE retains initialization across files while handles balance.
+  void *library = dlopen("libcrypto.so", RTLD_NOW|RTLD_LOCAL|RTLD_NODELETE);
+  if (!library) error_exit("libcrypto.so: %s", dlerror());
+  hash->init = crypto_symbol(library, hash->function_prefix, "Init");
+  hash->update = crypto_symbol(library, hash->function_prefix, "Update");
+  hash->final = crypto_symbol(library, hash->function_prefix, "Final");
+#endif
   hash->init(&ctx);
   for (;;) {
       i = read(fd, libbuf, sizeof(libbuf));
@@ -54,6 +86,9 @@ void hash_by_name(int fd, char *name, char *result)
 
   for (i = 0; i<hash->digest_length; i++)
     result += sprintf(result, "%02x", libbuf[i+128]);
+#ifdef TOYBOX_LAZY_LIBCRYPTO
+  if (dlclose(library)) error_exit("libcrypto.so: %s", dlerror());
+#endif
 }
 
 // Builtin implementations
